@@ -13,8 +13,12 @@ oauth.enable = false
 # service's audience; both are required when oauth is enabled.
 oauth.issuers = []
 oauth.audience = ""
+# Seconds (positive) for discovery, JWKS and userinfo calls.
 oauth.timeout = 10
+# Also ask the issuer's userinfo endpoint about each token (cached per
+# token, at most 5 minutes); the issuers must offer one.
 oauth.userinfo.enable = false
+# Lists given as environment variables (JSON arrays) replace these lists.
 basic_auth.enable = false
 basic_auth.username = "user"
 basic_auth.password = "password"

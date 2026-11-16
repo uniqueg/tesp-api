@@ -180,8 +180,10 @@ discovery document) about each token, for claims that the access token lacks (fo
 Passports or entitlements released only at userinfo). The answer must be plain JSON with the token's
 `sub`; anything else, an error or a timeout gives 401. Answers are cached per token until it expires,
 for at most 5 minutes. The claim rule and the decision service see token claims first, then userinfo
-claims (see Authorization). `oauth.timeout` (seconds, default 10) bounds the discovery, JWKS and
-userinfo calls.
+claims (see Authorization). With userinfo on, `TESP API` refuses to start if an issuer's discovery
+document has no usable `userinfo_endpoint` (`https`, or the issuer's own scheme). `oauth.timeout`
+(seconds, a positive number, default 10; otherwise `TESP API` refuses to start) bounds the discovery,
+JWKS and userinfo calls. Discovery documents are cached until restart.
 
 Task owners are the token's `sub`. With more than one issuer, owners become `<iss>|<sub>` so that
 equal subjects of different issuers stay apart; on start, `TESP API` then rewrites the owners of
@@ -189,12 +191,20 @@ existing tasks to `<first issuer>|<sub>`, so list the issuer that issued the exi
 first. Owners that already look issuer-qualified (`<URL>|...`) are left as they are, so later changes to
 the issuer list don't qualify them twice; renaming an issuer, however, needs a manual update of the
 owners stored with its old name. Going back to a single issuer after that would orphan every task, so
-`TESP API` then refuses to start until the owners are migrated by hand. Stop all replicas before
+`TESP API` then refuses to start until the owners are migrated by hand and the marker is removed:
+`mongosh tesp --eval 'db.meta.deleteOne({_id: "owners"})'`. Stop all replicas before
 adding a second issuer, so that no old replica keeps writing unqualified owners.
 
-List settings given as environment variables (JSON arrays) replace the list from `settings.toml`
-instead of being appended to it: `oauth.issuers`, `authz.required_claim.values`,
-`authz.required_claim.prefixes` and `authz.decision_service.claims`.
+List settings given as environment variables of their own (JSON arrays) replace the list from
+`settings.toml` instead of being appended to it: `oauth.issuers`, `oauth.audience`,
+`authz.required_claim.values`, `authz.required_claim.prefixes` and `authz.decision_service.claims`.
+Dynaconf still appends lists from other places (`merge_enabled`): an environment section such as
+`[dev-docker]` adds to `[default]`, `.secrets.toml` adds to `settings.toml`, and a parent-level
+variable such as `TESP_API_OAUTH='{issuers=[...]}'` adds to the file. So set each of these lists in
+one place only; otherwise more issuers, audiences or groups are accepted than intended.
+
+Discovery documents are fetched without following redirects: configure each issuer exactly as its
+`iss` claim and discovery URL read, without a redirect in between.
 
 Listing tasks pages by task ID: tasks come in ID order, and `next_page_token` is the last task's ID
 while a page is full. It is left out (`null`) once a page comes back short, so a full last page is

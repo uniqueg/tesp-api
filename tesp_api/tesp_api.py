@@ -29,7 +29,10 @@ async def startup_event():
     get_authz()  # Refuses to start on an invalid authz configuration.
     if properties.oauth.enable and not properties.basic_auth.enable:
         # Refuses to start without configured issuers and audience.
-        await task_repository.migrate_owners(get_token_validator().issuers)
+        validator = get_token_validator()
+        if validator.userinfo_enabled:
+            validator.check_userinfo()
+        await task_repository.migrate_owners(validator.issuers)
     asyncio.get_event_loop().set_debug(properties.logging.level == "DEBUG")
 
 

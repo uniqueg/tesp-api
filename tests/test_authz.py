@@ -344,14 +344,9 @@ def test_case_06b_userinfo_claims(tes, pdp, issuer):
     assert api.create("w")[0] == 403
 
 
-@pytest.mark.parametrize("failure", ["sub", "timeout", "jwt"])
-def test_case_20_userinfo_failure_is_401(tes, pdp, issuer, failure):
-    if failure == "sub":
-        issuer.userinfo_sub = "mallory"
-    elif failure == "timeout":
-        issuer.delay["/userinfo"] = 1.5
-    else:
-        issuer.userinfo_type = "application/jwt"
+def test_case_20_userinfo_failure_is_401(tes, pdp, issuer):
+    """The failure kinds are covered in test_token_validator; here the mapping to 401."""
+    issuer.userinfo_sub = "mallory"
     assert tes(pdp_on=True, userinfo=True).create(**ALICE)[0] == 401
     assert pdp.requests == []
 
@@ -653,6 +648,23 @@ def test_environment_lists_replace_file_lists(monkeypatch, tmp_path):
     assert replacing_list(get_properties([str(settings_file)]), "oauth.issuers") == ["https://old.example.org"]
 
 
+def test_token_validator_from_settings(monkeypatch, tmp_path):
+    settings_file = tmp_path / "settings.toml"
+    settings_file.write_text('[default]\noauth.issuers = ["https://idp.example.org"]\noauth.audience = ["svc"]\n'
+                             'oauth.timeout = 10\noauth.userinfo.enable = true\n')
+    monkeypatch.setenv("TESP_API_OAUTH__TIMEOUT", "3.5")
+    monkeypatch.setenv("TESP_API_OAUTH__AUDIENCE", '["tesp"]')
+    monkeypatch.setattr(endpoint_utils, "properties", get_properties([str(settings_file)]))
+    monkeypatch.setattr(endpoint_utils, "_token_validator", None)
+    validator = endpoint_utils.get_token_validator()
+    assert (validator.issuers, validator.audience, validator.timeout, validator.userinfo_enabled) == (
+        ["https://idp.example.org"], ["tesp"], 3.5, True)
+    monkeypatch.setenv("TESP_API_OAUTH__USERINFO__ENABLE", "false")
+    monkeypatch.setattr(endpoint_utils, "properties", get_properties([str(settings_file)]))
+    monkeypatch.setattr(endpoint_utils, "_token_validator", None)
+    assert endpoint_utils.get_token_validator().userinfo_enabled is False
+
+
 class FakeStartupRepository:
     def __init__(self):
         self.migrations = []
@@ -683,6 +695,13 @@ def startup(monkeypatch, oauth_on):
 def test_startup_refuses_oauth_without_issuers(startup):
     with pytest.raises(ValueError):
         startup(None)
+
+
+def test_startup_refuses_unusable_userinfo(startup, issuer):
+    validator = TokenValidator([issuer.url], "tesp-api", userinfo=True)
+    validator._issuer_config(issuer.url)["userinfo_endpoint"] = "ftp://x/userinfo"
+    with pytest.raises(ValueError):
+        startup(validator)
 
 
 def test_startup_checks_owner_migration(startup):

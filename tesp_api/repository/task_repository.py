@@ -33,7 +33,8 @@ async def owner_migration(tasks, meta, issuers: List[str]) -> None:
         await meta.update_one({'_id': 'owners'}, {'$set': {'issuer_qualified': True}}, upsert=True)
     elif (await meta.find_one({'_id': 'owners'}) or {}).get('issuer_qualified'):
         raise RuntimeError("Task owners are issuer-qualified ('<iss>|<sub>'), but only one issuer is "
-                           "configured; migrate the owners by hand before going back to one issuer.")
+                           "configured. Migrate the owners by hand, then delete the marker document "
+                           "{_id: 'owners'} in the collection 'meta' of the database 'tesp'.")
 
 
 async def get_mongo_client() -> AsyncIOMotorClient:

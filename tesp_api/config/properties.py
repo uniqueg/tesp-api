@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Sequence
 
 from dynaconf import Dynaconf
 from dynaconf.utils.parse_conf import parse_conf_data
@@ -7,7 +7,7 @@ from dynaconf.utils.parse_conf import parse_conf_data
 ENVVAR_PREFIX = "TESP_API"
 
 
-def get_properties(settings_files=("settings.toml", ".secrets.toml")) -> Dynaconf:
+def get_properties(settings_files: Sequence[str] = ("settings.toml", ".secrets.toml")) -> Dynaconf:
     return Dynaconf(
         settings_files=list(settings_files),
         environments=True,

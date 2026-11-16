@@ -120,8 +120,8 @@ def test_incomplete_configuration_is_refused(issuers, audience):
 
 
 def test_timeout_bounds_discovery(issuer):
-    issuer.delay["/.well-known/openid-configuration"] = 1.5
-    validator = TokenValidator([issuer.url], "tesp-api", timeout=0.5)
+    issuer.delay["/.well-known/openid-configuration"] = 0.4
+    validator = TokenValidator([issuer.url], "tesp-api", timeout=0.1)
     with pytest.raises(OAuth2TokenError):
         validator.verify(issuer.token("alice"))
 
@@ -163,9 +163,9 @@ def test_userinfo_failures_are_rejected(issuer, failure):
     elif failure == "jwt":
         issuer.userinfo_type = "application/jwt"
     else:
-        issuer.delay["/userinfo"] = 1.5
+        issuer.delay["/userinfo"] = 0.4
     with pytest.raises(OAuth2TokenError):
-        _userinfo(issuer, timeout=0.5)
+        _userinfo(issuer, timeout=0.1)
 
 
 def test_userinfo_needs_a_usable_endpoint(issuer):
@@ -175,6 +175,14 @@ def test_userinfo_needs_a_usable_endpoint(issuer):
     validator._issuer_config(issuer.url)["userinfo_endpoint"] = "ftp://elsewhere/userinfo"
     with pytest.raises(OAuth2TokenError):
         validator.userinfo(token, claims)
+
+
+def test_check_userinfo_at_startup(issuer):
+    TokenValidator([issuer.url], "tesp-api", userinfo=True).check_userinfo()
+    validator = TokenValidator([issuer.url], "tesp-api", userinfo=True)
+    validator._issuer_config(issuer.url)["userinfo_endpoint"] = None
+    with pytest.raises(ValueError):
+        validator.check_userinfo()
 
 
 class FakeCollection:

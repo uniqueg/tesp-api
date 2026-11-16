@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import jwt
 import requests
 from jwt import PyJWKClient
+from loguru import logger
 
 from tesp_api.service.error import OAuth2TokenError
 
@@ -36,7 +37,7 @@ class TokenValidator:
     """
 
     def __init__(self, issuers: Optional[List[str]], audience: Optional[Union[str, List[str]]],
-                 timeout: Any = 10, userinfo: bool = False):
+                 timeout: float = 10, userinfo: bool = False):
         issuers = list(issuers or [])
         if not issuers or not all(isinstance(i, str) and i.startswith(("https://", "http://")) for i in issuers):
             raise ValueError("oauth.issuers must list the accepted issuer URLs")
@@ -96,7 +97,8 @@ class TokenValidator:
         The issuer's userinfo answer for a verified token. Cached per token
         hash until the token expires, at most USERINFO_MAX_AGE seconds. Any
         failure, a non-JSON answer and a 'sub' other than the token's raise
-        OAuth2TokenError.
+        OAuth2TokenError. Concurrent first requests with one token may each
+        ask the issuer.
         """
         key = hashlib.sha256(token.encode()).hexdigest()
         now = time.time()
@@ -112,8 +114,10 @@ class TokenValidator:
             media_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
             info = response.json() if response.status_code == 200 and media_type == "application/json" else None
         except (requests.RequestException, ValueError, KeyError) as e:
-            raise OAuth2TokenError(f"Userinfo lookup failed. Ex: {type(e).__name__}")
+            logger.warning(f"Userinfo lookup failed: {type(e).__name__}")
+            raise OAuth2TokenError("Userinfo lookup failed.")
         if not isinstance(info, dict) or info.get('sub') != claims['sub']:
+            logger.warning("Userinfo lookup failed: no JSON object with the token's sub")
             raise OAuth2TokenError("Userinfo lookup failed.")
         expires = claims.get('exp')
         until = min(now + USERINFO_MAX_AGE, float(expires) if isinstance(expires, (int, float)) else now)
@@ -122,6 +126,14 @@ class TokenValidator:
             while len(self._userinfo_cache) > USERINFO_CACHE_SIZE:
                 self._userinfo_cache.popitem(last=False)
         return copy.deepcopy(info)
+
+    def check_userinfo(self) -> None:
+        """At startup: every issuer must have a usable userinfo endpoint (ValueError otherwise)."""
+        for issuer in self.issuers:
+            try:
+                self._userinfo_endpoint(issuer)
+            except (requests.RequestException, ValueError) as e:
+                raise ValueError(f"oauth.userinfo.enable is on, but issuer {issuer}: {e}")
 
     def _userinfo_endpoint(self, issuer: str) -> str:
         """The discovered endpoint, if https or as secure as the issuer URL."""

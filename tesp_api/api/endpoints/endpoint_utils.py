@@ -78,7 +78,7 @@ def get_token_validator() -> TokenValidator:
     global _token_validator
     if _token_validator is None:
         issuers = replacing_list(properties, 'oauth.issuers')
-        _token_validator = TokenValidator(issuers, properties.oauth.get('audience'),
+        _token_validator = TokenValidator(issuers, replacing_list(properties, 'oauth.audience'),
                                           timeout=properties.oauth.get('timeout', 10),
                                           userinfo=properties.get('oauth.userinfo.enable', False))
     return _token_validator
