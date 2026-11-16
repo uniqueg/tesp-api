@@ -236,14 +236,14 @@ def strip_url(url: str) -> Optional[str]:
     at = region.rfind("@")
     if at >= 0 and query >= 0 and at > query or "\\" in region:
         return None  # ambiguous; WHATWG clients read a backslash as '/'.
-    cut = _first_of(rest, "?#")
-    if not region and "@" in (rest if cut < 0 else rest[:cut]):
-        return None  # empty authority, '@' in the path: WHATWG skips the extra slashes.
     if query >= 0:
         region, rest = region[:query], region[query:] + rest
     authority = region[region.rfind("@") + 1:]
     cut = _first_of(rest, "?#")
-    return url[:start] + authority + (rest if cut < 0 else rest[:cut])
+    path = rest if cut < 0 else rest[:cut]
+    if not authority and "@" in path:
+        return None  # empty authority, '@' in the path: WHATWG skips the extra slashes.
+    return url[:start] + authority + path
 
 
 def project(task: TesTask) -> Dict[str, Any]:
