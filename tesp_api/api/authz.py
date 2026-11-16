@@ -223,6 +223,8 @@ def strip_url(url: str) -> Optional[str]:
     parsers differ between languages, and falling back to the raw value
     would leak.
     """
+    if any(c in url for c in "\t\n\r"):
+        return None  # WHATWG clients delete these before parsing.
     scheme = _SCHEME.match(url)
     if not scheme:
         return None if "@" in url or "?" in url else url
