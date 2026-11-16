@@ -13,6 +13,8 @@ oauth.enable = false
 # service's audience; both are required when oauth is enabled.
 oauth.issuers = []
 oauth.audience = ""
+oauth.timeout = 10
+oauth.userinfo.enable = false
 basic_auth.enable = false
 basic_auth.username = "user"
 basic_auth.password = "password"

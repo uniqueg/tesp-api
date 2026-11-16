@@ -175,10 +175,30 @@ TESP_API_OAUTH__ISSUERS='["https://login.aai.lifescience-ri.eu/oidc/"]'
 TESP_API_OAUTH__AUDIENCE=tesp-api
 ```
 
+With `oauth.userinfo.enable = true`, `TESP API` also asks the issuer's userinfo endpoint (from its
+discovery document) about each token, for claims that the access token lacks (for example GA4GH
+Passports or entitlements released only at userinfo). The answer must be plain JSON with the token's
+`sub`; anything else, an error or a timeout gives 401. Answers are cached per token until it expires,
+for at most 5 minutes. The claim rule and the decision service see token claims first, then userinfo
+claims (see Authorization). `oauth.timeout` (seconds, default 10) bounds the discovery, JWKS and
+userinfo calls.
+
 Task owners are the token's `sub`. With more than one issuer, owners become `<iss>|<sub>` so that
 equal subjects of different issuers stay apart; on start, `TESP API` then rewrites the owners of
 existing tasks to `<first issuer>|<sub>`, so list the issuer that issued the existing tasks' tokens
-first. Owners that already carry one of the configured issuers are left as they are.
+first. Owners that already look issuer-qualified (`<URL>|...`) are left as they are, so later changes to
+the issuer list don't qualify them twice; renaming an issuer, however, needs a manual update of the
+owners stored with its old name. Going back to a single issuer after that would orphan every task, so
+`TESP API` then refuses to start until the owners are migrated by hand. Stop all replicas before
+adding a second issuer, so that no old replica keeps writing unqualified owners.
+
+List settings given as environment variables (JSON arrays) replace the list from `settings.toml`
+instead of being appended to it: `oauth.issuers`, `authz.required_claim.values`,
+`authz.required_claim.prefixes` and `authz.decision_service.claims`.
+
+Listing tasks pages by task ID: tasks come in ID order, and `next_page_token` is the last task's ID
+while a page is full. It is left out (`null`) once a page comes back short, so a full last page is
+followed by one empty page.
 
 &nbsp;
 ### Authorization

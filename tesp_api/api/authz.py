@@ -28,7 +28,7 @@ import aiohttp
 from fastapi import HTTPException, status
 from loguru import logger
 
-from tesp_api.config.properties import properties
+from tesp_api.config.properties import properties, replacing_list
 from tesp_api.repository.model.task import TesTask
 
 PROFILE = "tes-authzen/1"
@@ -38,7 +38,10 @@ _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 
 @dataclass(frozen=True)
 class Principal:
-    """The caller: owner id (None without authentication) and claims."""
+    """
+    The caller: owner id (None without authentication), validated token
+    claims and, with oauth.userinfo.enable, the issuer's userinfo answer.
+    """
 
     id: Optional[str]
     claims: Dict[str, Any] = field(default_factory=dict)
@@ -193,6 +196,8 @@ class Authz:
         answer: Any = None
         try:
             timeout = aiohttp.ClientTimeout(total=self._timeout)
+            # One session per evaluation: simple and safe across event loops,
+            # at the cost of a new connection per call.
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(self._url, json=body, allow_redirects=False,
                                         headers={**self._headers, "X-Request-ID": request_id}) as response:
@@ -268,6 +273,11 @@ def get_authz() -> Authz:
     global _authz
     if _authz is None:
         settings = _lower_keys(properties.get("authz") or {})
+        for section, name in (("required_claim", "values"), ("required_claim", "prefixes"),
+                              ("decision_service", "claims")):
+            value = replacing_list(properties, f"authz.{section}.{name}")
+            if value is not None:
+                settings.setdefault(section, {})[name] = _lower_keys(value)
         auth_enabled = bool(properties.oauth.enable or properties.basic_auth.enable)
         _authz = Authz(settings, auth_enabled, service_id())
     return _authz

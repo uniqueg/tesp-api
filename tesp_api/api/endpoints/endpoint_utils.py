@@ -8,7 +8,7 @@ from pydantic.main import BaseModel
 from pymonad.maybe import Nothing, Maybe
 from fastapi.params import Query, Depends
 
-from tesp_api.config.properties import properties
+from tesp_api.config.properties import properties, replacing_list
 from tesp_api.repository.model.task import TesTaskView
 from tesp_api.api.model.response_models import ErrorResponseModel
 from tesp_api.service.error import OAuth2TokenError, BasicAuthError
@@ -77,7 +77,10 @@ def get_token_validator() -> TokenValidator:
     """The validator for the configured issuers; built once, on first use."""
     global _token_validator
     if _token_validator is None:
-        _token_validator = TokenValidator(properties.oauth.get('issuers'), properties.oauth.get('audience'))
+        issuers = replacing_list(properties, 'oauth.issuers')
+        _token_validator = TokenValidator(issuers, properties.oauth.get('audience'),
+                                          timeout=properties.oauth.get('timeout', 10),
+                                          userinfo=properties.get('oauth.userinfo.enable', False))
     return _token_validator
 
 
@@ -86,9 +89,11 @@ def parse_verify_token(
     basic_credentials: HTTPBasicCredentials = Depends(basic_auth_scheme)
 ) -> Principal:
     if properties.basic_auth.enable:
+        if basic_credentials is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing credentials")
         try:
             username = verify_basic_auth(basic_credentials.username, basic_credentials.password)
-        except (BasicAuthError, AttributeError) as e:
+        except BasicAuthError as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
         return Principal(username, {"sub": username})
 
@@ -98,9 +103,10 @@ def parse_verify_token(
     try:
         validator = get_token_validator()
         claims = validator.verify(token)
+        userinfo = validator.userinfo(token, claims) if validator.userinfo_enabled else {}
     except OAuth2TokenError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
-    return Principal(validator.owner_id(claims), claims)
+    return Principal(validator.owner_id(claims), claims, userinfo)
 
 
 def authorized_principal(principal: Principal = Depends(parse_verify_token)) -> Principal:

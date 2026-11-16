@@ -21,6 +21,8 @@ class FakeIssuer:
         self.userinfo_status = 200
         self.userinfo_type = "application/json"
         self.discovery_issuer = None
+        self.userinfo_sub = None
+        self.delay = {}
         issuer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -29,6 +31,7 @@ class FakeIssuer:
 
             def do_GET(self):
                 issuer.requests.append(self.path)
+                time.sleep(issuer.delay.get(self.path, 0))
                 if self.path == "/.well-known/openid-configuration":
                     body = {
                         "issuer": issuer.discovery_issuer or issuer.url,
@@ -45,7 +48,7 @@ class FakeIssuer:
                     # Test issuer echoing the subject; nothing is trusted here.
                     # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
                     claims = jwt.decode(token, options={"verify_signature": False})
-                    body = {"sub": claims.get("sub"), **issuer.userinfo}
+                    body = {"sub": issuer.userinfo_sub or claims.get("sub"), **issuer.userinfo}
                     return self._send(issuer.userinfo_status, body, issuer.userinfo_type)
                 return self._send(404, {})
 

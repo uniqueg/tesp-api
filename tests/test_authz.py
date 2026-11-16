@@ -7,6 +7,7 @@ Case numbers refer to the conformance cases of the TES AuthZ profile
 import asyncio
 import json
 import threading
+import sys
 import time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +21,7 @@ from pymonad.promise import Promise
 from tesp_api.api import authz as authz_module
 from tesp_api.api.authz import Authz, Principal, strip_url
 from tesp_api.api.endpoints import endpoint_utils, task_endpoints
-from tesp_api.config.properties import get_properties
+from tesp_api.config.properties import get_properties, replacing_list
 from tesp_api.repository.model.task import RegisteredTesTask, TesTaskState
 from tesp_api.utils.functional import maybe_of
 from tesp_api.utils.token_validator import TokenValidator
@@ -179,9 +180,9 @@ def oauth_on():
 @pytest.fixture
 def tes(monkeypatch, oauth_on, issuer, repo, pdp):
     """Start the API with a given hook configuration; returns a client factory."""
-    monkeypatch.setattr(endpoint_utils, "_token_validator", TokenValidator([issuer.url], "tesp-api"))
-
-    def start(pdp_on=False, **settings):
+    def start(pdp_on=False, userinfo=False, **settings):
+        validator = TokenValidator([issuer.url], "tesp-api", timeout=0.5, userinfo=userinfo)
+        monkeypatch.setattr(endpoint_utils, "_token_validator", validator)
         if pdp_on:
             settings.setdefault("decision_service", {})["url"] = pdp.url
         monkeypatch.setattr(authz_module, "_authz", Authz(settings, auth_enabled=True, service_id=SERVICE_ID))
@@ -296,7 +297,7 @@ def test_case_02_service_info_open(tes):
     assert tes().call("GET", "/service-info", sub=None)[0] == 200
 
 
-def test_case_05_rule_fails_pdp_not_called(tes, pdp, repo):
+def test_case_05_and_16_rule_fails_pdp_not_called(tes, pdp, repo):
     api = tes(pdp_on=True, required_claim=RULE)
     task_id = repo.add("alice")
     assert api.create(**CAROL)[0] == 403
@@ -328,6 +329,40 @@ def test_case_05c_dotted_path_and_uri_name(tes, name):
 def test_case_05d_client_credentials_without_claim(tes):
     api = tes(required_claim=RULE)
     assert api.create("protes", client_id="protes", scope="openid")[0] == 403
+
+
+def test_case_06b_userinfo_claims(tes, pdp, issuer):
+    """Userinfo fills claims missing from the token; the token's value wins."""
+    issuer.userinfo = {"eduperson_entitlement": [SUBGROUP], "groups": ["from-userinfo"]}
+    api = tes(pdp_on=True, userinfo=True, required_claim=RULE,
+              decision_service={"claims": ["eduperson_entitlement", "groups"]})
+    assert api.create("u", groups=["from-token"])[0] == 200
+    assert pdp.requests[0]["body"]["subject"]["properties"]["claims"] == {
+        "eduperson_entitlement": [SUBGROUP], "groups": ["from-token"]}
+    issuer.userinfo = {"eduperson_entitlement": [NEAR_MISS]}
+    assert api.create("v", eduperson_entitlement=[SUBGROUP])[0] == 200
+    assert api.create("w")[0] == 403
+
+
+@pytest.mark.parametrize("failure", ["sub", "timeout", "jwt"])
+def test_case_20_userinfo_failure_is_401(tes, pdp, issuer, failure):
+    if failure == "sub":
+        issuer.userinfo_sub = "mallory"
+    elif failure == "timeout":
+        issuer.delay["/userinfo"] = 1.5
+    else:
+        issuer.userinfo_type = "application/jwt"
+    assert tes(pdp_on=True, userinfo=True).create(**ALICE)[0] == 401
+    assert pdp.requests == []
+
+
+def test_case_21_userinfo_once_per_token(tes, issuer):
+    api = tes(userinfo=True)
+    token = issuer.token("alice")
+    for _ in range(2):
+        response = api.client.post("/v1/tasks", json=TASK, headers={"Authorization": "Bearer " + token})
+        assert response.status_code == 200
+    assert issuer.requests.count("/userinfo") == 1
 
 
 def test_case_07_create_request_shape(tes, pdp, repo):
@@ -566,3 +601,91 @@ def test_settings_from_environment(monkeypatch):
     authz.gate(Principal("a", {"g": "x,y"}))
     with pytest.raises(HTTPException):
         authz.gate(Principal("a", {"g": ["urn:a:vox"]}))
+
+
+def test_case_01_nothing_configured_without_auth(monkeypatch, repo):
+    """Without authentication and authz, every caller sees and cancels every task, as before."""
+    monkeypatch.setattr(authz_module, "_authz", Authz({}, auth_enabled=False, service_id=SERVICE_ID))
+    client = TestClient(APP)
+    task_id = repo.add(None)
+    assert client.get(f"/v1/tasks/{task_id}").status_code == 200
+    assert [t["id"] for t in client.get("/v1/tasks").json()["tasks"]] == [task_id]
+    assert client.post(f"/v1/tasks/{task_id}:cancel").status_code == 200
+
+
+def test_case_03_and_06_exact_value(tes):
+    api = tes(required_claim={"name": "groups", "values": ["a"]})
+    assert api.create("u", groups="a")[0] == 200
+    assert api.create("u", groups=["b", "a"])[0] == 200
+    assert api.create("u", groups=["ab"])[0] == 403
+
+
+def test_case_13b_scope_change_between_pages(tes, repo, pdp):
+    """Keyset cursor: the next page applies the scope of the new evaluation."""
+    for owner in ("alice", "bob", "alice", "bob"):
+        repo.add(owner)
+    pdp.decide(True, **{"ListTasks/all": False})
+    api = tes(pdp_on=True)
+    first = api.call("GET", "/tasks?page_size=1", **ALICE)[1]
+    assert [repo.tasks[ObjectId(t["id"])].author for t in first["tasks"]] == ["alice"]
+    pdp.decide(True)
+    rest = api.call("GET", f"/tasks?page_token={first['next_page_token']}", **ALICE)[1]["tasks"]
+    assert [repo.tasks[ObjectId(t["id"])].author for t in rest] == ["bob", "alice", "bob"]
+
+
+def test_environment_lists_replace_file_lists(monkeypatch, tmp_path):
+    """An environment list replaces the file's list instead of widening it."""
+    settings_file = tmp_path / "settings.toml"
+    settings_file.write_text('[default]\noauth.enable = true\noauth.issuers = ["https://old.example.org"]\n'
+                             'authz.required_claim.name = "g"\nauthz.required_claim.values = ["vo-a"]\n')
+    monkeypatch.setenv("TESP_API_OAUTH__ISSUERS", '["https://new.example.org"]')
+    monkeypatch.setenv("TESP_API_AUTHZ__REQUIRED_CLAIM__VALUES", '["vo-b"]')
+    settings = get_properties([str(settings_file)])
+    assert settings.get("authz.required_claim.values") == ["vo-a", "vo-b"]  # what merging alone would give
+    monkeypatch.setattr(authz_module, "properties", settings)
+    monkeypatch.setattr(authz_module, "_authz", None)
+    authz = authz_module.get_authz()
+    authz.gate(Principal("a", {"g": "vo-b"}))
+    with pytest.raises(HTTPException):
+        authz.gate(Principal("a", {"g": "vo-a"}))
+    assert replacing_list(settings, "oauth.issuers") == ["https://new.example.org"]
+    monkeypatch.delenv("TESP_API_OAUTH__ISSUERS")
+    assert replacing_list(get_properties([str(settings_file)]), "oauth.issuers") == ["https://old.example.org"]
+
+
+class FakeStartupRepository:
+    def __init__(self):
+        self.migrations = []
+
+    async def init(self):
+        pass
+
+    async def migrate_owners(self, issuers):
+        self.migrations.append(issuers)
+
+
+@pytest.fixture
+def startup(monkeypatch, oauth_on):
+    """Run the app's startup event with a fake repository; returns the repository."""
+    app_module = sys.modules["tesp_api.tesp_api"]
+    repository = FakeStartupRepository()
+    monkeypatch.setattr(app_module, "task_repository", repository)
+    monkeypatch.setattr(authz_module, "_authz", Authz({}, auth_enabled=True, service_id=SERVICE_ID))
+
+    def run(validator):
+        monkeypatch.setattr(endpoint_utils, "_token_validator", validator)
+        asyncio.run(app_module.startup_event())
+        return repository
+
+    return run
+
+
+def test_startup_refuses_oauth_without_issuers(startup):
+    with pytest.raises(ValueError):
+        startup(None)
+
+
+def test_startup_checks_owner_migration(startup):
+    issuers = ["https://a.example.org", "https://b.example.org"]
+    assert startup(TokenValidator(issuers, "tesp-api")).migrations == [issuers]
+    assert startup(TokenValidator(issuers[:1], "tesp-api")).migrations == [issuers, issuers[:1]]

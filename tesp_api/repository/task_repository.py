@@ -14,17 +14,26 @@ from tesp_api.config.properties import properties
 from tesp_api.repository.model.task import RegisteredTesTask, TesTaskState
 
 
-async def owner_migration(tasks, legacy_issuer: str, issuers: List[str]) -> None:
+# An issuer-qualified owner: '<URL>|<sub>' (an issuer URL contains no '|').
+QUALIFIED_OWNER = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^|]*\|")
+
+
+async def owner_migration(tasks, meta, issuers: List[str]) -> None:
     """
-    Qualifies existing owners with their issuer ('<iss>|<sub>') when more
-    than one issuer is accepted. Owners that already start with one of the
-    accepted issuers and '|' are left as they are, so it can run on every
-    start.
+    With more than one accepted issuer, owners are '<iss>|<sub>': qualify the
+    existing unqualified owners with the first issuer and record that owners
+    are qualified. Owners that already look qualified are left as they are, so
+    it can run on every start. Going back to one issuer after that would orphan
+    every task, so it refuses to start instead.
     """
-    qualified = re.compile("^(?:" + "|".join(re.escape(i + "|") for i in issuers) + ")")
-    await tasks.update_many(
-        {'author': {'$type': 'string', '$not': qualified}},
-        [{'$set': {'author': {'$concat': [legacy_issuer + "|", "$author"]}}}])
+    if len(issuers) > 1:
+        await tasks.update_many(
+            {'author': {'$type': 'string', '$not': QUALIFIED_OWNER}},
+            [{'$set': {'author': {'$concat': [issuers[0] + "|", "$author"]}}}])
+        await meta.update_one({'_id': 'owners'}, {'$set': {'issuer_qualified': True}}, upsert=True)
+    elif (await meta.find_one({'_id': 'owners'}) or {}).get('issuer_qualified'):
+        raise RuntimeError("Task owners are issuer-qualified ('<iss>|<sub>'), but only one issuer is "
+                           "configured; migrate the owners by hand before going back to one issuer.")
 
 
 async def get_mongo_client() -> AsyncIOMotorClient:
@@ -42,8 +51,8 @@ class TaskRepository:
         self._client = await get_mongo_client()
         self._tasks = self._client.tesp["tasks"]
 
-    async def migrate_owners(self, legacy_issuer: str, issuers: List[str]) -> None:
-        await owner_migration(self._tasks, legacy_issuer, issuers)
+    async def migrate_owners(self, issuers: List[str]) -> None:
+        await owner_migration(self._tasks, self._client.tesp["meta"], issuers)
 
     def create_task(self, task: RegisteredTesTask) -> Promise:
         task = jsonable_encoder(task, by_alias=True, exclude={"id"})
