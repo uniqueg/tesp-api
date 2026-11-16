@@ -13,6 +13,7 @@ from tesp_api.repository.model.task import TesTaskView
 from tesp_api.api.model.response_models import ErrorResponseModel
 from tesp_api.service.error import OAuth2TokenError, BasicAuthError
 from tesp_api.utils.token_validator import TokenValidator
+from tesp_api.api.authz import Principal, get_authz
 from tesp_api.utils.basic_auth import verify_basic_auth
 
 descriptions = {
@@ -83,21 +84,29 @@ def get_token_validator() -> TokenValidator:
 def parse_verify_token(
     token: str = Depends(oauth2_scheme),
     basic_credentials: HTTPBasicCredentials = Depends(basic_auth_scheme)
-):
+) -> Principal:
     if properties.basic_auth.enable:
         try:
-            return verify_basic_auth(basic_credentials.username, basic_credentials.password)
-        except BasicAuthError as e:
+            username = verify_basic_auth(basic_credentials.username, basic_credentials.password)
+        except (BasicAuthError, AttributeError) as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+        return Principal(username, {"sub": username})
 
     if not properties.oauth.enable:
-        return None
+        return Principal(None)
 
     try:
         validator = get_token_validator()
-        return validator.owner_id(validator.verify(token))
+        claims = validator.verify(token)
     except OAuth2TokenError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+    return Principal(validator.owner_id(claims), claims)
+
+
+def authorized_principal(principal: Principal = Depends(parse_verify_token)) -> Principal:
+    """The caller, admitted by the claim rule (authz.required_claim)."""
+    get_authz().gate(principal)
+    return principal
 
 
 def get_view(view: Optional[TesTaskView]) -> dict:

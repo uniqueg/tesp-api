@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from pymonad.maybe import Maybe, Nothing
 from pymongo import ReturnDocument
@@ -87,6 +87,18 @@ class TaskRepository:
             .map(lambda task: maybe_of(task)
                  .map(lambda _task: RegisteredTesTask(**_task)))\
             .catch(handle_data_layer_error)
+
+    async def get_task_meta(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """A task's owner, state and tags, without owner filter; None if missing or malformed."""
+        if not ObjectId.is_valid(task_id):
+            return None
+        try:
+            task = await self._tasks.find_one({'_id': ObjectId(task_id)}, {'author': 1, 'state': 1, 'tags': 1})
+        except Exception as error:
+            handle_data_layer_error(error)
+        if task is None:
+            return None
+        return {'owner': task.get('author'), 'state': task.get('state'), 'tags': task.get('tags') or {}}
 
     def get_tasks(
             self,

@@ -180,6 +180,49 @@ equal subjects of different issuers stay apart; on start, `TESP API` then rewrit
 existing tasks to `<first issuer>|<sub>`, so list the issuer that issued the existing tasks' tokens
 first. Owners that already carry one of the configured issuers are left as they are.
 
+&nbsp;
+### Authorization
+Without further configuration, callers see, list and cancel only their own tasks (with authentication
+enabled). Two optional, independent parts can be added; when both are set, both must allow. They need
+authentication (`oauth` or `basic_auth`) and follow the TES AuthZ profile `tes-authzen/1`.
+
+- **Claim rule** (`authz.required_claim`): admits a caller only if the claim `name` (an exact top-level
+  claim name first, e.g. `https://example.org/groups`, else a dotted path such as `ctx.groups`) is a
+  string or a list of strings with a value equal to one of `values` or starting with one of `prefixes`.
+  Prefixes are raw string prefixes, so include the delimiter (`...:group:vo:`, not `...:group:vo`).
+  Everyone else gets 403. Client-credentials tokens rarely carry such claims; with service clients or
+  behind proTES, leave the rule unset and express the rule in the decision service instead.
+- **Decision service** (`authz.decision_service`): an [OpenID AuthZEN 1.0](https://openid.net/specs/authorization-api-1_0-final.html)
+  Access Evaluation endpoint (`url`, the full evaluation URL). TESP asks it once per create, get and
+  cancel, and twice per list (task sets `all` and `own`); it replaces the built-in owner rule. It gets
+  the caller's owner ID, `iss`, `sub`, `client_id`, `scope` and the claims named in `claims`, never the
+  token, and for creation a projection of the task without commands, environments, input contents and
+  URL credentials or queries. A denied get gives 404; a denied cancel gives 403 if the caller may read
+  the task, else 404. Any failure (timeout after `timeout` seconds, default 2; connection error;
+  non-200; a body without a boolean `decision`) gives 503. An optional `credential_file` holds a bearer
+  token that TESP sends to the decision service. Secure the connection (HTTPS or mesh mTLS); plain
+  `http` to a non-loopback host is logged as a warning.
+
+`TESP API` refuses to start when `authz` is configured without authentication, when the rule has no
+name, no values and prefixes, or an empty value or prefix, when a `decision_service` key is set without
+`url`, when `url` isn't an `http(s)` URL with a host, and when the credential file is empty or
+unreadable. `service_info.id` (default `fi.muni.cz.tesp`) is the service ID reported by `/service-info`
+and sent to the decision service.
+
+```toml
+[default]
+service_info.id = "org.example.tesp"
+authz.required_claim.name = "eduperson_entitlement"
+authz.required_claim.values = ["urn:geant:lifescience-ri.eu:group:example-vo#login.aai.lifescience-ri.eu"]
+authz.required_claim.prefixes = ["urn:geant:lifescience-ri.eu:group:example-vo:"]
+authz.decision_service.url = "https://pdp.example.org/access/v1/evaluation"
+authz.decision_service.claims = ["eduperson_entitlement"]
+```
+
+As environment variables, lists are JSON arrays (group names can contain commas), for example
+`TESP_API_AUTHZ__REQUIRED_CLAIM__PREFIXES='["urn:geant:lifescience-ri.eu:group:example-vo:"]'` and
+`TESP_API_AUTHZ__DECISION_SERVICE__URL=https://pdp.example.org/access/v1/evaluation`.
+
 Container execution runtime is controlled by the `CONTAINER_TYPE` environment variable (`docker` or
 `singularity`). The default is `docker`.
 
