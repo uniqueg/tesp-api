@@ -7,6 +7,7 @@ from fastapi import FastAPI, APIRouter, Request
 import tesp_api.service.event_actions
 from tesp_api.api.api import api_router
 from tesp_api.api.error import api_handle_error
+from tesp_api.api.endpoints.endpoint_utils import get_token_validator
 from tesp_api.config.log_config import logg_configure
 from tesp_api.config.properties import properties
 from tesp_api.repository.task_repository import task_repository
@@ -24,6 +25,11 @@ async def get_root() -> RedirectResponse:
 async def startup_event():
     logg_configure()
     await task_repository.init()
+    if properties.oauth.enable and not properties.basic_auth.enable:
+        # Refuses to start without configured issuers and audience.
+        validator = get_token_validator()
+        if len(validator.issuers) > 1:
+            await task_repository.migrate_owners(validator.issuers[0], validator.issuers)
     asyncio.get_event_loop().set_debug(properties.logging.level == "DEBUG")
 
 

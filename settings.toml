@@ -9,6 +9,10 @@ logging.level = "DEBUG"
 logging.output_json = false
 
 oauth.enable = false
+# Accepted token issuers (exactly as in the tokens' "iss") and this
+# service's audience; both are required when oauth is enabled.
+oauth.issuers = []
+oauth.audience = ""
 basic_auth.enable = false
 basic_auth.username = "user"
 basic_auth.password = "password"

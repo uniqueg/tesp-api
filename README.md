@@ -160,8 +160,25 @@ in the [./docker/tesp_api/Dockerfile](https://github.com/CESNET/tesp-api/blob/ma
 ### Authentication
 `TESP API` can run without authentication (default). To enable Basic Auth, set `basic_auth.enable = true`
 and configure `basic_auth.username` and `basic_auth.password` in `settings.toml`. To enable OAuth2,
-set `oauth.enable = true` and pass a Bearer token; the token is validated via the issuer in its `iss`
-claim using OIDC discovery.
+set `oauth.enable = true`, list the accepted token issuers in `oauth.issuers` (each exactly as in the
+tokens' `iss` claim) and set this service's audience in `oauth.audience`; clients pass a Bearer token.
+`TESP API` refuses to start when either is missing. Tokens from other issuers are rejected without
+contacting them. For each configured issuer, the signing keys come from its OIDC discovery document
+(fetched on first use and cached); a token must be signed with an asymmetric algorithm (RS, ES or PS)
+and name the configured audience in `aud`.
+
+Example (environment variables):
+
+```bash
+TESP_API_OAUTH__ENABLE=true
+TESP_API_OAUTH__ISSUERS='["https://login.aai.lifescience-ri.eu/oidc/"]'
+TESP_API_OAUTH__AUDIENCE=tesp-api
+```
+
+Task owners are the token's `sub`. With more than one issuer, owners become `<iss>|<sub>` so that
+equal subjects of different issuers stay apart; on start, `TESP API` then rewrites the owners of
+existing tasks to `<first issuer>|<sub>`, so list the issuer that issued the existing tasks' tokens
+first. Owners that already carry one of the configured issuers are left as they are.
 
 Container execution runtime is controlled by the `CONTAINER_TYPE` environment variable (`docker` or
 `singularity`). The default is `docker`.

@@ -1,4 +1,5 @@
-from typing import Dict, Any
+import re
+from typing import Dict, Any, List
 
 from pymonad.maybe import Maybe, Nothing
 from pymongo import ReturnDocument
@@ -11,6 +12,19 @@ from tesp_api.repository.error import handle_data_layer_error
 from tesp_api.utils.functional import maybe_of
 from tesp_api.config.properties import properties
 from tesp_api.repository.model.task import RegisteredTesTask, TesTaskState
+
+
+async def owner_migration(tasks, legacy_issuer: str, issuers: List[str]) -> None:
+    """
+    Qualifies existing owners with their issuer ('<iss>|<sub>') when more
+    than one issuer is accepted. Owners that already start with one of the
+    accepted issuers and '|' are left as they are, so it can run on every
+    start.
+    """
+    qualified = re.compile("^(?:" + "|".join(re.escape(i + "|") for i in issuers) + ")")
+    await tasks.update_many(
+        {'author': {'$type': 'string', '$not': qualified}},
+        [{'$set': {'author': {'$concat': [legacy_issuer + "|", "$author"]}}}])
 
 
 async def get_mongo_client() -> AsyncIOMotorClient:
@@ -27,6 +41,9 @@ class TaskRepository:
     async def init(self):
         self._client = await get_mongo_client()
         self._tasks = self._client.tesp["tasks"]
+
+    async def migrate_owners(self, legacy_issuer: str, issuers: List[str]) -> None:
+        await owner_migration(self._tasks, legacy_issuer, issuers)
 
     def create_task(self, task: RegisteredTesTask) -> Promise:
         task = jsonable_encoder(task, by_alias=True, exclude={"id"})

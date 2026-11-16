@@ -12,7 +12,7 @@ from tesp_api.config.properties import properties
 from tesp_api.repository.model.task import TesTaskView
 from tesp_api.api.model.response_models import ErrorResponseModel
 from tesp_api.service.error import OAuth2TokenError, BasicAuthError
-from tesp_api.utils.token_validator import verify_token
+from tesp_api.utils.token_validator import TokenValidator
 from tesp_api.utils.basic_auth import verify_basic_auth
 
 descriptions = {
@@ -69,6 +69,17 @@ async def list_query_params(name_prefix: Optional[str] = qry_var_name_prefix,
     }
 
 
+_token_validator: Optional[TokenValidator] = None
+
+
+def get_token_validator() -> TokenValidator:
+    """The validator for the configured issuers; built once, on first use."""
+    global _token_validator
+    if _token_validator is None:
+        _token_validator = TokenValidator(properties.oauth.get('issuers'), properties.oauth.get('audience'))
+    return _token_validator
+
+
 def parse_verify_token(
     token: str = Depends(oauth2_scheme),
     basic_credentials: HTTPBasicCredentials = Depends(basic_auth_scheme)
@@ -83,7 +94,8 @@ def parse_verify_token(
         return None
 
     try:
-        return verify_token(token)
+        validator = get_token_validator()
+        return validator.owner_id(validator.verify(token))
     except OAuth2TokenError as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 
