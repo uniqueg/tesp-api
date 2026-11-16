@@ -43,7 +43,9 @@ class TokenValidator:
         if not token:
             raise OAuth2TokenError("Missing bearer token.")
         try:
-            # Only used to pick one of the configured issuers; verified below.
+            # Only picks one of the configured issuers; the token is verified below
+            # against that issuer's keys, issuer and audience.
+            # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
             unverified_iss = jwt.decode(token, options={"verify_signature": False}).get('iss')
         except jwt.PyJWTError as e:
             raise OAuth2TokenError(f"Failed to decode token. Ex: {str(e)}")

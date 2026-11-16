@@ -68,6 +68,8 @@ def test_expired_token_is_rejected(issuer):
 
 def test_unsigned_token_is_rejected(issuer):
     validator = TokenValidator([issuer.url], "tesp-api")
+    # An unsigned token on purpose: the validator must reject it.
+    # nosemgrep: python.jwt.security.jwt-none-alg.jwt-python-none-alg
     token = jwt.encode({"iss": issuer.url, "sub": "alice", "aud": "tesp-api", "exp": 2**31}, None, algorithm="none")
     with pytest.raises(OAuth2TokenError):
         validator.verify(token)

@@ -42,6 +42,8 @@ class FakeIssuer:
                     return self._send(200, {"keys": [public]})
                 if self.path == "/userinfo":
                     token = self.headers.get("Authorization", "").removeprefix("Bearer ")
+                    # Test issuer echoing the subject; nothing is trusted here.
+                    # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
                     claims = jwt.decode(token, options={"verify_signature": False})
                     body = {"sub": claims.get("sub"), **issuer.userinfo}
                     return self._send(issuer.userinfo_status, body, issuer.userinfo_type)
